@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RGB-11: SCI Hybrid Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --r-color: #FF004D; --g-color: #00FF41; --b-color: #0088FF; --bg-color: #050505;
+        }
+        body { background: var(--bg-color); color: #fff; font-family: 'Inter', sans-serif; margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 2px; }
+        ::-webkit-scrollbar-thumb { background: #333; }
+
+        /* Smart Inputs */
+        .input-wrapper { position: relative; margin-bottom: 12px; }
+        .input-wrapper textarea {
+            background: rgba(20, 20, 20, 0.9); border: 1px solid rgba(255,255,255,0.1); color: #fff;
+            resize: none; transition: all 0.3s; width: 100%; padding: 12px 40px 12px 16px; border-radius: 12px; font-size: 14px;
+        }
+        .input-wrapper textarea:focus { outline: none; border-color: rgba(255,255,255,0.3); }
+
+        /* Indicators inside */
+        .input-wrapper .indicator {
+            position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+            width: 12px; height: 12px; border-radius: 50%; background: #222; transition: all 0.2s; z-index: 10;
+        }
+        .input-wrapper .indicator.r.active { background: var(--r-color); box-shadow: 0 0 12px var(--r-color); }
+        .input-wrapper .indicator.g.active { background: var(--g-color); box-shadow: 0 0 12px var(--g-color); }
+        .input-wrapper .indicator.b.active { background: var(--b-color); box-shadow: 0 0 12px var(--b-color); }
+
+        /* Canvas */
+        .canvas-container {
+            flex: 1; display: flex; justify-content: center; align-items: center; position: relative;
+            background: radial-gradient(circle at 50% 50%, #111, #000);
+        }
+        #qr-main { max-width: 100%; max-height: 100%; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
+        #video { display: none; position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        #freeze-frame { display: none; position: absolute; width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+        /* Buttons */
+        .btn-scan-main {
+            width: 100%; padding: 16px; background: #fff; color: #000; font-weight: 800;
+            border-radius: 16px; font-size: 18px; text-transform: uppercase; letter-spacing: 2px;
+            transition: all 0.3s ease; border: none;
+        }
+        .btn-scan-main.hidden { opacity: 0; transform: scale(0.8); height: 0; padding: 0; margin: 0; pointer-events: none; }
+        
+        .scan-options {
+            display: flex; gap: 12px; opacity: 0; height: 0; overflow: hidden; transition: all 0.3s ease;
+        }
+        .scan-options.show { opacity: 1; height: auto; margin-top: 12px; }
+        
+        .btn-action {
+            flex: 1; padding: 12px; background: #222; color: #fff; border: 1px solid #444;
+            border-radius: 12px; font-weight: 600; cursor: pointer; transition: 0.2s; display: flex; flex-direction: column; align-items: center; font-size: 12px;
+        }
+        .btn-action span { font-size: 10px; color: #888; margin-top: 2px; }
+        .btn-action:active { background: #333; transform: scale(0.98); }
+        
+        /* Active Mode Indicator */
+        .mode-badge {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; font-size: 10px; color: #888; z-index: 20; backdrop-filter: blur(5px);
+        }
+        .mode-badge.active { color: var(--g-color); border: 1px solid var(--g-color); }
+
+        /* Flash */
+        @keyframes flash { 0% { opacity: 0; } 20% { opacity: 0.8; } 100% { opacity: 0; } }
+        .flash { animation: flash 0.3s ease-out; position: absolute; inset: 0; background: #fff; pointer-events: none; z-index: 50; }
+    </style>
+</head>
+<body class="p-4 flex flex-col">
+
+    <!-- Header -->
+    <header class="flex justify-between items-center mb-4">
+        <div>
+            <h1 class="text-xl font-black">RGB-11 <span class="text-zinc-500 text-xs font-mono block">HYBRID ENGINE</span></h1>
+        </div>
+        <button onclick="globalReset()" class="text-xs text-zinc-400 border border-zinc-700 px-3 py-1 rounded-full">RESET</button>
+    </header>
+
+    <!-- Inputs / Outputs -->
+    <div class="input-section px-1">
+        <div class="input-wrapper">
+            <div class="indicator r" id="ind-r"></div>
+            <textarea id="r-text" rows="1" placeholder="RED CHANNEL"></textarea>
+        </div>
+        <div class="input-wrapper">
+            <div class="indicator g" id="ind-g"></div>
+            <textarea id="g-text" rows="1" placeholder="GREEN CHANNEL"></textarea>
+        </div>
+        <div class="input-wrapper">
+            <div class="indicator b" id="ind-b"></div>
+            <textarea id="b-text" rows="1" placeholder="BLUE CHANNEL"></textarea>
+        </div>
+    </div>
+
+    <!-- Viewport -->
+    <div class="canvas-container my-4 rounded-2xl overflow-hidden border border-zinc-800">
+        <div class="mode-badge" id="mode-badge">STANDBY</div>
+        <canvas id="qr-main" width="512" height="512"></canvas>
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="freeze-frame"></canvas>
+        <div id="flash-layer" class="flash" style="opacity:0"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-section mt-auto">
+        <button id="btn-scan-main" class="btn-scan-main" onclick="toggleScanUI()">SCAN</button>
+
+        <div id="scan-options" class="scan-options">
+            <button class="btn-action" onclick="startCamera()">
+                📷 Camera
+                <span>Standard Mode</span>
+            </button>
+            <button class="btn-action" onclick="startCamera(true)">
+                🔍 Deep Scan
+                <span>Active Search</span>
+            </button>
+            <input type="file" id="file-input" accept="image/*" class="hidden" onchange="handleFile(event)">
+            <button class="btn-action" onclick="document.getElementById('file-input').click()">
+                🖼 Gallery
+                <span>Image File</span>
+            </button>
+        </div>
+
+        <button id="btn-save" class="w-full mt-3 py-3 border border-green-500 text-green-400 rounded-xl font-bold opacity-0 transition-opacity" onclick="saveQR()">💾 SAVE RESULT</button>
+    </div>
+
+<script>
+    // === CORE STATE ===
+    const state = {
+        scanning: false,
+        locked: { r: false, g: false, b: false },
+        results: { r: null, g: null, b: null },
+        // Hybrid Logic State
+        activeSearch: false, // User chose Deep Scan or auto-triggered
+        standardFailCount: 0,
+        AUTO_TRIGGER_THRESHOLD: 90, // ~3 seconds at 30fps
+        // Sweep Parameters
+        time: 0,
+        config: {
+            R: { offset: 0, gain: 1.0, k1: 0.10, k2: 0.20 },
+            G: { offset: 0, gain: 1.0, k1: 0.18, k2: 0.33 },
+            B: { offset: 0, gain: 1.0, k1: 0.05, k2: 0.13 }
+        }
+    };
+
+    const els = {
+        video: document.getElementById('video'),
+        canvas: document.getElementById('qr-main'),
+        ctx: document.getElementById('qr-main').getContext('2d', { willReadFrequently: true }),
+        freeze: document.getElementById('freeze-frame'),
+        fCtx: document.getElementById('freeze-frame').getContext('2d', { willReadFrequently: true }),
+        r: document.getElementById('r-text'), g: document.getElementById('g-text'), b: document.getElementById('b-text'),
+        indR: document.getElementById('ind-r'), indG: document.getElementById('ind-g'), indB: document.getElementById('ind-b'),
+        flash: document.getElementById('flash-layer'),
+        btnMain: document.getElementById('btn-scan-main'),
+        btnOpts: document.getElementById('scan-options'),
+        btnSave: document.getElementById('btn-save'),
+        modeBadge: document.getElementById('mode-badge')
+    };
+
+    // === 1. UI LOGIC ===
+
+    function toggleScanUI() {
+        els.btnMain.classList.add('hidden');
+        els.btnOpts.classList.add('show');
+    }
+
+    function toggleMainUI() {
+        els.btnMain.classList.remove('hidden');
+        els.btnOpts.classList.remove('show');
+    }
+
+    function updateUIFromState() {
+        ['r', 'g', 'b'].forEach(ch => {
+            const el = els[ch];
+            const ind = els['ind' + ch.toUpperCase()];
+            const isLocked = state.locked[ch];
+            
+            if (isLocked) {
+                ind.classList.add('active');
+                el.value = state.results[ch] || "";
+                el.style.borderColor = ch === 'r' ? '#FF004D' : (ch === 'g' ? '#00FF41' : '#0088FF');
+            } else {
+                if (!state.results[ch]) ind.classList.remove('active');
+                el.style.borderColor = 'rgba(255,255,255,0.1)';
+            }
+        });
+
+        if (state.results.r || state.results.g || state.results.b) {
+            els.btnSave.style.opacity = '1';
+            generateQR();
+        } else {
+            els.btnSave.style.opacity = '0';
+        }
+    }
+
+    function playBeep() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.frequency.value = 880; o.type = "square";
+            g.gain.setValueAtTime(0.1, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.1);
+            o.start(); o.stop(ctx.currentTime + 0.1);
+        } catch(e){}
+    }
+
+    // === 2. ALGORITHMS ===
+
+    // A. Standard Processing (From "Original" reliable version)
+    function applyBradleyStandard(imgData, chIdx) {
+        const w = imgData.width, h = imgData.height;
+        const input = imgData.data;
+        const output = new Uint8ClampedArray(w * h * 4);
+        const intImg = new Int32Array(w * h);
+        const s = Math.floor(w / 8), t = 15;
+
+        // Integral Image
+        for (let y = 0; y < h; y++) {
+            let sum = 0;
+            for (let x = 0; x < w; x++) {
+                sum += input[(y * w + x) * 4 + chIdx];
+                intImg[y * w + x] = (y > 0 ? intImg[(y - 1) * w + x] : 0) + sum;
+            }
+        }
+
+        // Threshold
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const x1 = Math.max(x - s, 0), x2 = Math.min(x + s, w - 1);
+                const y1 = Math.max(y - s, 0), y2 = Math.min(y + s, h - 1);
+                const count = (x2 - x1) * (y2 - y1);
+                const sum = intImg[y2 * w + x2] - intImg[y1 * w + x2] - intImg[y2 * w + x1] + intImg[y1 * w + x1];
+                const val = input[(y * w + x) * 4 + chIdx];
+                const res = (val * count < sum * (100 - t) / 100) ? 0 : 255;
+                const idx = (y * w + x) * 4;
+                output[idx] = output[idx+1] = output[idx+2] = res; output[idx+3] = 255;
+            }
+        }
+        return output;
+    }
+
+    // B. Active Search Processing (SCI Math + Sweep)
+    function applySCIMath(imgData, ch, cfg) {
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+            let r = d[i], g = d[i+1], b = d[i+2];
+            let target, n1, n2;
+            if (ch === 'R') { target = r; n1 = g; n2 = b; }
+            else if (ch === 'G') { target = g; n1 = r; n2 = b; }
+            else { target = b; n1 = r; n2 = g; }
+
+            let res = (target - (n1 * cfg.k1 + n2 * cfg.k2)) * cfg.gain + cfg.offset;
+            res = Math.max(0, Math.min(255, res));
+            d[i] = res; d[i+1] = res; d[i+2] = res; d[i+3] = 255;
+        }
+    }
+
+    // Triangle Wave for Sweep
+    function getOscParam(t, period, min, max) {
+        const cycle = t % period;
+        const half = period / 2;
+        const pos = (cycle < half) ? cycle / half : (period - cycle) / half;
+        return min + pos * (max - min);
+    }
+
+    // === 3. MAIN PROCESSING LOOP (Hybrid) ===
+
+    function processLoop() {
+        if (!state.scanning) return;
+
+        // 1. Get Source Data
+        // We need a fresh copy for every attempt in the loop
+        let sourceCopy = null;
+        if (els.video.style.display !== 'none' && els.video.readyState === els.video.HAVE_ENOUGH_DATA) {
+            els.ctx.drawImage(els.video, 0, 0, 512, 512);
+            sourceCopy = els.ctx.getImageData(0, 0, 512, 512);
+        } else if (els.freeze.style.display !== 'none') {
+            // For static images, we can reuse the frozen context but need fresh data
+            sourceCopy = els.fCtx.getImageData(0, 0, 512, 512);
+        }
+
+        if (sourceCopy) {
+            let foundAny = false;
+            
+            // === STRATEGY SELECTION ===
+            // If Standard failed too many times, switch to Active Search
+            if (state.standardFailCount > state.AUTO_TRIGGER_THRESHOLD) {
+                if (!state.activeSearch) {
+                    state.activeSearch = true;
+                    els.modeBadge.innerText = "ACTIVE SEARCH";
+                    els.modeBadge.classList.add('active');
+                }
+            }
+
+            if (state.activeSearch) {
+                // --- ACTIVE SEARCH MODE ---
+                state.time++;
+                
+                // Sweep Parameters
+                const gain = getOscParam(state.time, 100, 0.5, 3.5);
+                const offset = getOscParam(state.time, 250, -80, 0);
+                
+                ['R', 'G', 'B'].forEach(ch => {
+                    if (!state.locked[ch.toLowerCase()]) {
+                        const cfg = state.config[ch];
+                        cfg.gain = gain;
+                        cfg.offset = offset;
+
+                        // Apply SCI
+                        // Create a copy to destroy with SCI math
+                        let workData = new ImageData(new Uint8ClampedArray(sourceCopy.data), 512, 512);
+                        applySCIMath(workData, ch, cfg);
+                        
+                        // Apply Bradley on the result
+                        // We need a wrapper to reuse applyBradleyStandard which returns output
+                        let mono = applyBradleyStandard(workData, 0); // Channel 0 is now Gray
+                        
+                        const code = jsQR(mono, 512, 512, { inversionAttempts: "attemptBoth" });
+                        if (code) {
+                            foundAny = true;
+                            lockChannel(ch, code.data);
+                        }
+                    }
+                });
+                
+                // Optional: Visualize the sweep on the main canvas for user feedback
+                // (Re-processing last channel for display)
+                if (!foundAny) {
+                     let lastCh = ['R', 'G', 'B'].find(c => !state.locked[c.toLowerCase()]) || 'B';
+                     let workData = new ImageData(new Uint8ClampedArray(sourceCopy.data), 512, 512);
+                     applySCIMath(workData, lastCh, state.config[lastCh]);
+                     // Apply Bradley for visualization too
+                         applyBradleyStandard(workData, 0); 
+                     els.ctx.putImageData(workData, 0, 0);
+                }
+
+            } else {
+                // --- STANDARD MODE (Reliable) ---
+                state.standardFailCount++;
+                
+                ['R', 'G', 'B'].forEach((ch, idx) => {
+                    if (!state.locked[ch.toLowerCase()]) {
+                        // Use the reliable logic: Extract Channel -> Bradley -> Decode
+                        // sourceCopy is untouched here
+                        const mono = applyBradleyStandard(sourceCopy, idx);
+                        const code = jsQR(mono, 512, 512, { inversionAttempts: "attemptBoth" });
+                        
+                        if (code) {
+                            foundAny = true;
+                            lockChannel(ch, code.data);
+                        }
+                    }
+                });
+                
+                // Visualize last scanned channel (or just raw)
+                if (!foundAny) els.ctx.putImageData(sourceCopy, 0, 0);
+            }
+        }
+
+        requestAnimationFrame(processLoop);
+    }
+
+    function lockChannel(ch, data) {
+        state.locked[ch.toLowerCase()] = true;
+        state.results[ch.toLowerCase()] = data;
+        playBeep();
+        updateUIFromState();
+        
+        // Flash effect
+        els.flash.style.opacity = '1';
+        setTimeout(() => els.flash.style.opacity = '0', 200);
+        
+        // If all found, stop loop (optional)
+        if (state.locked.r && state.locked.g && state.locked.b) {
+            // Keep running to show result, or stop? Let's stop to save battery.
+            // state.scanning = false; 
+        }
+    }
+
+    // === 4. ACTIONS ===
+
+    async function startCamera(forceActive = false) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } });
+            els.video.srcObject = stream;
+            els.video.play();
+            els.video.style.display = 'block';
+            els.canvas.style.display = 'block'; // Show canvas for processing
+            els.freeze.style.display = 'none';
+            
+            state.scanning = true;
+            state.standardFailCount = 0;
+            state.activeSearch = forceActive; // Set mode immediately if "Deep Scan" clicked
+            if(forceActive) {
+                els.modeBadge.innerText = "ACTIVE SEARCH";
+                els.modeBadge.classList.add('active');
+            } else {
+                els.modeBadge.innerText = "STANDARD SCAN";
+                els.modeBadge.classList.remove('active');
+            }
+            
+            processLoop();
+        } catch (e) {
+            alert("Camera Error");
+        }
+    }
+
+    function handleFile(e) {
+        const file = e.target.files[0]; if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const img = new Image();
+            img.onload = () => {
+                els.freeze.width = 512; els.freeze.height = 512;
+                const s = Math.min(img.width, img.height);
+                const sx = (img.width - s)/2, sy = (img.height - s)/2;
+                els.fCtx.drawImage(img, sx, sy, s, s, 0, 0, 512, 512);
+                
+                els.freeze.style.display = 'block';
+                els.video.style.display = 'none';
+                els.canvas.style.display = 'block'; // Show canvas
+
+                state.scanning = true;
+                state.standardFailCount = 50; // Kickstart Active Search almost immediately for files
+                state.activeSearch = true;
+                els.modeBadge.innerText = "ACTIVE SEARCH";
+                els.modeBadge.classList.add('active');
+                
+                processLoop();
+            };
+            img.src = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function globalReset() {
+        state.scanning = false;
+        state.locked = {r:false, g:false, b:false};
+        state.results = {r:null, g:null, b:null};
+        state.standardFailCount = 0;
+        state.activeSearch = false;
+        state.time = 0;
+        
+        els.r.value = ""; els.g.value = ""; els.b.value = "";
+        updateUIFromState();
+        
+        if(els.video.srcObject) els.video.srcObject.getTracks().forEach(t => t.stop());
+        els.video.style.display = 'none';
+        els.freeze.style.display = 'none';
+        els.canvas.style.display = 'block';
+        els.modeBadge.innerText = "STANDBY";
+        els.modeBadge.classList.remove('active');
+        
+        toggleMainUI();
+        generateQR(); 
+    }
+
+    // === 5. GENERATOR ===
+    function generateQR() {
+        const texts = [els.r.value, els.g.value, els.b.value];
+        if (!texts.some(t => t.trim())) return;
+        
+        let maxVer = 1;
+        texts.forEach(t => { if(t.trim()){ const tmp=qrcode(0,'M'); tmp.addData(t); tmp.make(); const v=Math.floor((tmp.getModuleCount()-17)/4); if(v>maxVer)maxVer=v; }});
+        
+        els.ctx.fillStyle = "#000"; els.ctx.fillRect(0,0,512,512);
+        els.ctx.globalCompositeOperation = "lighten";
+        
+        texts.forEach((text, i) => {
+            if(!text.trim()) return;
+            const qr = qrcode(maxVer, 'M'); qr.addData(text); qr.make();
+            const mod = 512 / qr.getModuleCount();
+            els.ctx.fillStyle = i === 0 ? "#FF0000" : (i === 1 ? "#00FF00" : "#0000FF");
+            for(let r=0; r<qr.getModuleCount(); r++){
+                for(let c=0; c<qr.getModuleCount(); c++){
+                    if(qr.isDark(r,c)) els.ctx.fillRect(c*mod, r*mod, mod, mod);
+                }
+            }
+        });
+        els.ctx.globalCompositeOperation = "source-over";
+    }
+
+    function saveQR() {
+        generateQR();
+        const a = document.createElement('a');
+        a.href = els.canvas.toDataURL();
+        a.download = 'rgb11_result.png';
+        a.click();
+    }
+
+    // Init listeners
+    [els.r, els.g, els.b].forEach(el => el.addEventListener('input', generateQR));
+
+</script>
+</body>
+</html>
